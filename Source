@@ -1,1 +1,278 @@
+import pandas as pd
+import numpy as np
 
+import matplotlib.pyplot as plt
+import seaborn as sns
+
+import plotly.express as px
+import plotly.graph_objects as go
+
+from sklearn.decomposition import PCA, NMF
+from sklearn.preprocessing import StandardScaler
+from sklearn.linear_model import LinearRegression
+
+import kagglehub
+from kagglehub import KaggleDatasetAdapter
+
+# Set the path to the file you'd like to load
+file_path = "cost_of_living_us.csv"
+
+# Load the latest version
+df = kagglehub.load_dataset(
+  KaggleDatasetAdapter.PANDAS,
+  "asaniczka/us-cost-of-living-dataset-3171-counties",
+  file_path,
+
+)
+
+print("First 5 records:", df.head())
+
+# Drop case_id as instructed
+df = df.drop(columns=["case_id"])
+
+# Quick structure check
+print(df.info())
+print(df.head())
+
+# Identify quantitative vs categorical (for your report text)
+categorical_vars = ["state", "isMetro", "areaname", "county"]
+quantitative_vars = [
+    "family_member_count", "housing_cost", "food_cost", "transportation_cost",
+    "healthcare_cost", "other_necessities_cost", "childcare_cost",
+    "taxes", "total_cost", "median_family_income"
+]
+
+# 1. Clean: drop nulls
+print("Nulls before:", df.isna().sum())
+df = df.dropna()
+print("Shape after dropna:", df.shape)
+
+# 2. Interactive table: summary by state
+# Convert 'family_member_count' to numeric type
+# Assuming format 'XpYc' means X parents and Y children, total X+Y members
+def parse_family_member_count(s):
+    if isinstance(s, str):
+        parts = s.split('p')
+        if len(parts) == 2:
+            try:
+                parents = int(parts[0])
+                children_str = parts[1].replace('c', '')
+                children = int(children_str)
+                return parents + children
+            except ValueError:
+                return None # Handle cases where conversion to int fails
+    return None # For non-string or unparseable formats
+
+# Apply the conversion if the column is still of object type
+if pd.api.types.is_object_dtype(df['family_member_count']):
+    df['family_member_count'] = df['family_member_count'].apply(parse_family_member_count)
+    # Ensure it's numeric after conversion, coerce errors to NaN
+    df['family_member_count'] = pd.to_numeric(df['family_member_count'], errors='coerce')
+
+state_summary = df.groupby("state")[quantitative_vars].mean().reset_index()
+
+fig_table = go.Figure(data=[go.Table(
+    header=dict(values=list(state_summary.columns),
+                fill_color='paleturquoise',
+                align='left'),
+    cells=dict(values=[state_summary[col] for col in state_summary.columns],
+               fill_color='lavender',
+               align='left')
+)])
+fig_table.update_layout(title="Summary Table by State (Mean of Quantitative Variables)")
+fig_table.show()
+
+vars_3 = [
+    "transportation_cost", "healthcare_cost", "childcare_cost",
+    "taxes", "median_family_income", "family_member_count"
+]
+
+for col in vars_3:
+    plt.figure(figsize=(12, 5))
+    sns.boxplot(data=df, x="state", y=col)
+    plt.xticks(rotation=90)
+    plt.title(f"{col} by State")
+    plt.tight_layout()
+    plt.show()
+
+# 4. Group by state and color table (using background gradient in pandas)
+state_group = df.groupby("state")[vars_3].mean().sort_values("transportation_cost", ascending=False)
+styled_state_group = state_group.style.background_gradient(cmap="viridis")
+# In Spyder, this will show in the Variable Explorer / HTML view
+styled_state_group
+
+state_transport = df.groupby("state")["transportation_cost"].mean().reset_index()
+
+fig_choro = px.choropleth(
+    state_transport,
+    locations="state",
+    locationmode="USA-states",
+    color="transportation_cost",
+    scope="usa",
+    color_continuous_scale="Reds",
+    title="Average Transportation Cost by State"
+)
+fig_choro.show()
+
+# 6a. total_cost vs transportation_cost
+plt.figure(figsize=(8, 6))
+sns.scatterplot(data=df, x="transportation_cost", y="total_cost", hue="state", legend=False)
+plt.title("Total Cost vs Transportation Cost")
+plt.tight_layout()
+plt.show()
+
+# 6b. childcare_cost vs taxes
+plt.figure(figsize=(8, 6))
+sns.scatterplot(data=df, x="childcare_cost", y="taxes", hue="state", legend=False)
+plt.title("Childcare Cost vs Taxes")
+plt.tight_layout()
+plt.show()
+
+# 6c. median_family_income vs taxes
+plt.figure(figsize=(8, 6))
+sns.scatterplot(data=df, x="median_family_income", y="taxes", hue="state", legend=False)
+plt.title("Median Family Income vs Taxes")
+plt.tight_layout()
+plt.show()
+
+# 6d. housing_cost vs taxes
+plt.figure(figsize=(8, 6))
+sns.scatterplot(data=df, x="housing_cost", y="taxes", hue="state", legend=False)
+plt.title("Housing Cost vs Taxes")
+plt.tight_layout()
+plt.show()
+
+top_childcare = df.sort_values("childcare_cost", ascending=False).head(12)
+print(top_childcare[["state", "county", "childcare_cost"]])
+
+plt.figure(figsize=(10, 6))
+sns.barplot(data=top_childcare, x="childcare_cost", y="county", hue="state", dodge=False)
+plt.title("Top 12 Counties by Childcare Cost")
+plt.tight_layout()
+plt.show()
+
+top_taxes = df.sort_values("taxes", ascending=False).head(12)
+print(top_taxes[["state", "county", "taxes"]])
+
+plt.figure(figsize=(10, 6))
+sns.barplot(data=top_taxes, x="taxes", y="county", hue="state", dodge=False)
+plt.title("Top 12 Counties by Taxes")
+plt.tight_layout()
+plt.show()
+
+corr = df[quantitative_vars].corr()
+
+plt.figure(figsize=(10, 8))
+sns.heatmap(corr, annot=True, cmap="coolwarm", fmt=".2f")
+plt.title("Correlation Matrix of Quantitative Variables")
+plt.tight_layout()
+plt.show()
+
+X = df[["taxes"]]
+y = df["total_cost"]
+
+model = LinearRegression()
+model.fit(X, y)
+
+print("Intercept:", model.intercept_)
+print("Slope:", model.coef_[0])
+
+# Plot with regression line
+plt.figure(figsize=(8, 6))
+sns.scatterplot(x=df["taxes"], y=df["total_cost"], alpha=0.4)
+x_vals = np.linspace(df["taxes"].min(), df["taxes"].max(), 100)
+y_pred = model.intercept_ + model.coef_[0] * x_vals
+plt.plot(x_vals, y_pred, color="red", linewidth=2)
+plt.title("Regression: Total Cost vs Taxes")
+plt.xlabel("Taxes")
+plt.ylabel("Total Cost")
+plt.tight_layout()
+plt.show()
+
+plt.figure(figsize=(12, 6))
+sns.boxplot(data=df, x="state", y="food_cost")
+plt.xticks(rotation=90)
+plt.title("Food Cost by State (Outliers)")
+plt.tight_layout()
+plt.show()
+
+fig_bubble1 = px.scatter(
+    df,
+    x="food_cost",
+    y="taxes",
+    size="childcare_cost",
+    color="isMetro",
+    hover_data=["state", "county"],
+    title="Food Cost vs Taxes (Bubble size: Childcare Cost, Color: isMetro)"
+)
+fig_bubble1.show()
+
+fig_bubble2 = px.scatter(
+    df,
+    x="housing_cost",
+    y="taxes",
+    size="transportation_cost",
+    color="state",
+    hover_data=["county"],
+    title="Housing Cost vs Taxes (Bubble size: Transportation Cost, Color: State)"
+)
+fig_bubble2.show()
+
+
+fig_3d_1 = px.scatter_3d(
+    df,
+    x="transportation_cost",
+    y="healthcare_cost",
+    z="childcare_cost",
+    color="state",
+    title="3D Plot: Transportation vs Healthcare vs Childcare Cost"
+)
+fig_3d_1.show()
+
+fig_3d_2 = px.scatter_3d(
+    df,
+    x="childcare_cost",
+    y="taxes",
+    z="median_family_income",
+    color="state",
+    title="3D Plot: Childcare Cost, Taxes, Median Family Income"
+)
+fig_3d_2.show()
+
+	X_num = df[quantitative_vars].values
+scaler = StandardScaler()
+X_scaled = scaler.fit_transform(X_num)
+
+pca = PCA(n_components=3)
+X_pca = pca.fit_transform(X_scaled)
+
+print("Explained variance ratio:", pca.explained_variance_ratio_)
+
+pca_df = pd.DataFrame(X_pca, columns=["PC1", "PC2", "PC3"])
+pca_df["state"] = df["state"].values
+
+fig_pca = px.scatter_3d(
+    pca_df,
+    x="PC1", y="PC2", z="PC3",
+    color="state",
+    title="PCA (3 Components)"
+)
+fig_pca.show()
+
+nmf = NMF(n_components=3, init="random", random_state=42, max_iter=500)
+W = nmf.fit_transform(df[quantitative_vars])
+H = nmf.components_
+
+nmf_df = pd.DataFrame(W, columns=["NMF1", "NMF2", "NMF3"])
+nmf_df["state"] = df["state"].values
+
+fig_nmf = px.scatter_3d(
+    nmf_df,
+    x="NMF1", y="NMF2", z="NMF3",
+    color="state",
+    title="NMF (3 Components)"
+)
+fig_nmf.show()
+
+print("NMF components (H):")
+print(pd.DataFrame(H, columns=quantitative_vars, index=["NMF1", "NMF2", "NMF3"]))
